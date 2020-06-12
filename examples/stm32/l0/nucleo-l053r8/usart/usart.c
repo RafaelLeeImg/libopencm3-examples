@@ -21,7 +21,7 @@
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/stm32/gpio.h>
 #include <libopencm3/stm32/usart.h>
-
+#include <libopencm3/cm3/nvic.h>
 
 #define LD2_PORT GPIOA
 #define LD2_PIN GPIO5
@@ -36,12 +36,9 @@
 
 #define CONSOLE_USART USART2
 
-
-
 static void clock_setup(void)
 {
 	/* Enable GPIOC clock for LED & USARTs. */
-	// rcc_periph_clock_enable(RCC_GPIOB);
 	rcc_periph_clock_enable(RCC_GPIOA);
 
 	/* Enable clocks for USART2. */
@@ -50,16 +47,22 @@ static void clock_setup(void)
 
 static void usart_setup(void)
 {
+	/* Enable the USART2 interrupt. */
+	nvic_enable_irq(NVIC_USART2_IRQ);
+
 	/* Setup USART2 parameters. */
 	usart_set_baudrate(USART2, 115200);
 	usart_set_databits(USART2, 8);
 	usart_set_parity(USART2, USART_PARITY_NONE);
 	usart_set_stopbits(USART2, USART_CR2_STOPBITS_1);
-	usart_set_mode(USART2, USART_MODE_TX);
+	usart_set_mode(USART2, USART_MODE_TX_RX);
 	usart_set_flow_control(USART2, USART_FLOWCONTROL_NONE);
 
 	/* Finally enable the USART. */
 	usart_enable(USART2);
+
+	/* Enable USART2 Receive interrupt. */
+	usart_enable_rx_interrupt(USART2);
 }
 
 static void gpio_setup(void)
@@ -71,10 +74,11 @@ static void gpio_setup(void)
 	gpio_mode_setup(LD2_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, LD2_PIN);
 
 	// /* Setup USART2 TX pin as alternate function. */
-    // described in
-    // DM00104451 - PM0223 - Programming manual Cortex®-M0+ programming manual
-    // for STM32L0, STM32G0, STM32WL and STM32WB Series(Rev 13).pdf
-    // Table 16. Alternate function port A
+	// described in
+	// DM00104451 - PM0223 - Programming manual Cortex®-M0+ programming manual
+	// for STM32L0, STM32G0, STM32WL and STM32WB Series(Rev 13).pdf
+	//
+	// Table 16. Alternate function port A
 
 	gpio_mode_setup(CONSOLE_TX_PORT, GPIO_MODE_AF, GPIO_PUPD_NONE, CONSOLE_TX_PIN);
 	gpio_mode_setup(CONSOLE_RX_PORT, GPIO_MODE_AF, GPIO_PUPD_NONE, CONSOLE_RX_PIN);
@@ -91,19 +95,38 @@ int main(void)
 	gpio_setup();
 	usart_setup();
 
-	/* Blink the LED (PD12) on the board with every transmitted byte. */
-	while (1) {
-		gpio_toggle(LD2_PORT, LD2_PIN);	/* LED on/off */
-		usart_send_blocking(USART2, c + '0'); /* USART2: Send byte. */
-		c = (c == 9) ? 0 : c + 1;	/* Increment c. */
-		if ((j++ % 80) == 0) {		/* Newline after line full. */
-			usart_send_blocking(USART2, '\r');
-			usart_send_blocking(USART2, '\n');
-		}
-		for (i = 0; i < 100000; i++) {	/* Wait a bit. */
-			__asm__("NOP");
-		}
-	}
+	uint8_t data = 0;
+	while (1);
 
 	return 0;
+}
+
+void usart2_isr(void)
+{
+	static uint8_t data = 'A';
+
+	/* Check if we were called because of RXNE. */
+	if (((USART_CR1(USART2) & USART_CR1_RXNEIE) != 0) &&
+		((USART_ISR(USART2) & USART_ISR_RXNE) != 0)) {
+
+		/* Indicate that we got data. */
+		gpio_toggle(LD2_PORT, LD2_PIN); /* LED on/off */
+
+		/* Retrieve the data from the peripheral. */
+		data = usart_recv(USART2);
+
+		/* Enable transmit interrupt so it sends back the data. */
+		usart_enable_tx_interrupt(USART2);
+	}
+
+	/* Check if we were called because of TXE. */
+	if (((USART_CR1(USART2) & USART_CR1_TXEIE) != 0) &&
+		((USART_ISR(USART2) & USART_ISR_TXE) != 0)) {
+
+		/* Put data into the transmit register. */
+		usart_send(USART2, data);
+
+		/* Disable the TXE interrupt as we don't need it anymore. */
+		usart_disable_tx_interrupt(USART2);
+	}
 }
