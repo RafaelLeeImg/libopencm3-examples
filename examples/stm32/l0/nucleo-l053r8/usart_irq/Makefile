@@ -17,7 +17,7 @@
 ## along with this library.  If not, see <http://www.gnu.org/licenses/>.
 ##
 
-BINARY = usart
+BINARY = usart_irq
 
 LDSCRIPT = ../stm32f0-nucleo.ld
 
